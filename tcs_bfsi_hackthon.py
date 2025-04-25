@@ -10,7 +10,7 @@ from sklearn.metrics import classification_report, confusion_matrix, ConfusionMa
 import xgboost as xgb
 
 # Load dataset
-data_path = "german_credit_data.csv"
+data_path = "./german_credit_data.csv"
 credit_data = pd.read_csv(data_path)
 
 # Drop unnecessary column
