@@ -3,108 +3,158 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
-import xgboost as xgb
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 
-# Streamlit App
-st.set_page_config(page_title="German Credit Risk Analysis", layout="wide")
-st.title("German Credit Risk Analysis")
+st.set_page_config(page_title="Credit Risk Predictor", layout="wide")
 
-# Sidebar for user inputs
-st.sidebar.header("Data and Model Settings")
-raw_url = st.sidebar.text_input("german_credit_data.csv"
+# Load default dataset
+@st.cache_data
+def load_data():
+    df = pd.read_csv("german_credit_data.csv")
+    # Create binary target: 1 if Credit amount > 5000 else 0
+    df['Class'] = df['Credit amount'].apply(lambda x: 1 if x > 5000 else 0)
+    return df
+
+# Train model
+def train_model(X_train, y_train):
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    return model
+
+# Sidebar navigation
+st.sidebar.title("Navigation")
+section = st.sidebar.radio("Go to", ["Dataset", "Model Training", "Prediction"])
+
+# Upload or load default data
+uploaded_file = st.sidebar.file_uploader("Upload your CSV", type="csv")
+if uploaded_file:
+    df = pd.read_csv(uploaded_file)
+    st.sidebar.success("Custom dataset loaded.")
+else:
+    df = load_data()
+    st.sidebar.info("Using default German Credit dataset.")
+
+# Preprocessing setup
+# Define numeric columns for scaling
+num_cols = ["Age", "Credit amount", "Duration"]
+
+# Prepare features and target
+X = df.drop(columns=['Class', 'Unnamed: 0'], errors='ignore')
+y = df['Class']
+# One-hot encode categorical variables
+X = pd.get_dummies(X, drop_first=True)
+
+# Split into train and test
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
 )
 
-test_size = st.sidebar.slider("Test Set Size (%)", min_value=10, max_value=50, value=20, step=5)
-n_estimators = st.sidebar.selectbox("Number of Trees (n_estimators)", [50, 100, 200, 300], index=1)
-max_depth = st.sidebar.selectbox("Max Tree Depth", [3, 5, 7, 9], index=1)
-learning_rate = st.sidebar.selectbox("Learning Rate", [0.01, 0.05, 0.1, 0.2], index=2)
-cv_folds = st.sidebar.selectbox("CV Folds", [3, 5, 7], index=0)
-run_button = st.sidebar.button("Train Model")
+# Initialize and fit scaler on train's numeric features only
+scaler = StandardScaler()
+scaler.fit(X_train[num_cols])
 
-# Cache data loading\@st.cache_data
-def load_data(url):
-    df = pd.read_csv(url)
-    # Drop unnecessary column if present
-    if 'Unnamed: 0' in df.columns:
-        df = df.drop(columns=['Unnamed: 0'])
-    return df
+# Apply scaling to train and test numeric columns
+X_train_scaled = X_train.copy()
+X_train_scaled[num_cols] = scaler.transform(X_train[num_cols])
 
-# Main pipeline
-def preprocess(df):
-    # Handle missing categorical
-    df.fillna({'Saving accounts': 'unknown', 'Checking account': 'unknown'}, inplace=True)
-    # Encode categorical
-    encoders = {}
-    for col in df.select_dtypes(include='object').columns:
-        le = LabelEncoder()
-        df[col] = le.fit_transform(df[col])
-        encoders[col] = le
-    # Scale numerical
-    scaler = StandardScaler()
-    df[['Age', 'Credit amount', 'Duration']] = scaler.fit_transform(df[['Age', 'Credit amount', 'Duration']])
-    # Define target
-    credit_limit = df['Credit amount'].median()
-    time_limit = df['Duration'].median()
-    df['Target'] = ((df['Credit amount'] > credit_limit) & (df['Duration'] < time_limit)).astype(int)
-    return df
+X_test_scaled = X_test.copy()
+X_test_scaled[num_cols] = scaler.transform(X_test[num_cols])
 
-# Plot functions
-def plot_correlation(df):
-    fig, ax = plt.subplots(figsize=(10, 8))
-    sns.heatmap(df.corr(), annot=True, cmap='coolwarm', fmt='.2f', linewidths=0.5, ax=ax)
-    st.subheader("Feature Correlation Heatmap")
-    st.pyplot(fig)
+# Train model on processed data
+model = train_model(X_train_scaled, y_train)
+# Evaluate on test set
+y_pred = model.predict(X_test_scaled)
+accuracy = accuracy_score(y_test, y_pred)
 
-def plot_confusion(cm):
-    fig, ax = plt.subplots()
-    disp = ConfusionMatrixDisplay(cm, display_labels=['Low Risk', 'High Risk'])
-    disp.plot(cmap='YlGnBu', ax=ax)
-    st.subheader("Confusion Matrix")
-    st.pyplot(fig)
+# APP SECTIONS
+if section == "Dataset":
+    st.title("📊 Dataset Preview")
+    st.dataframe(df.head(10))
+    st.metric("Rows", df.shape[0])
+    st.metric("Columns", df.shape[1])
 
-# Execute
-if raw_url:
-    try:
-        data = load_data(raw_url)
-        st.write("### Raw Data Preview", data.head())
-        plot_correlation(data)
+elif section == "Model Training":
+    st.title("🤖 Model Performance")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Model Accuracy", f"{accuracy:.2%}")
+    with col2:
+        st.subheader("Confusion Matrix")
+        cm = confusion_matrix(y_test, y_pred)
+        fig, ax = plt.subplots(figsize=(6, 4))
+        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax)
+        ax.set_xlabel("Predicted")
+        ax.set_ylabel("Actual")
+        st.pyplot(fig)
 
-        if run_button:
-            df = preprocess(data.copy())
-            X = df.drop(columns=['Target'])
-            y = df['Target']
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=test_size/100, stratify=y, random_state=42
-            )
-            params = {
-                'n_estimators': n_estimators,
-                'max_depth': max_depth,
-                'learning_rate': learning_rate
-            }
-            st.write(f"## Training XGBoost with params: {params}")
-            model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42, **params)
-            grid = GridSearchCV(model, {
-                'n_estimators': [n_estimators],
-                'max_depth': [max_depth],
-                'learning_rate': [learning_rate]
-            }, scoring='f1', cv=cv_folds, n_jobs=-1)
-            grid.fit(X_train, y_train)
-            best = grid.best_estimator_
-            y_pred = best.predict(X_test)
+    st.subheader("Classification Report")
+    st.text(classification_report(y_test, y_pred))
 
-            report = classification_report(y_test, y_pred, output_dict=True)
-            cm = confusion_matrix(y_test, y_pred)
+    st.subheader("Top 10 Important Features")
+    importances = model.feature_importances_
+    feature_names = X.columns
+    feat_df = pd.DataFrame({ 'Feature': feature_names, 'Importance': importances })
+    feat_df = feat_df.sort_values(by='Importance', ascending=False)
 
-            st.subheader("Classification Report")
-            st.table(pd.DataFrame(report).T)
-            plot_confusion(cm)
-            st.write(f"### Best CV Score: {grid.best_score_:.4f}")
-            st.write(f"### Best Params: {grid.best_params_}")
+    fig2, ax2 = plt.subplots(figsize=(10, 6))
+    sns.barplot(data=feat_df.head(10), x='Importance', y='Feature', ax=ax2)
+    st.pyplot(fig2)
 
-    except Exception as e:
-        st.error(f"Error loading or processing data: {e}")
-else:
-    st.info("Please provide the raw GitHub CSV URL.")
+elif section == "Prediction":
+    st.title("🔮 Predict Credit Risk")
+
+    with st.form("custom_input_form"):
+        st.markdown("#### Enter applicant details:")
+        age = st.number_input("Age", int(df.Age.min()), int(df.Age.max()), int(df.Age.median()))
+        sex = st.selectbox("Sex", df["Sex"].unique())
+        job = st.selectbox("Job", df["Job"].unique())
+        housing = st.selectbox("Housing", df["Housing"].unique())
+        saving = st.selectbox("Saving accounts", df["Saving accounts"].fillna("missing").unique())
+        checking = st.selectbox("Checking account", df["Checking account"].fillna("missing").unique())
+        credit = st.number_input(
+            "Credit amount",
+            float(df["Credit amount"].min()),
+            float(df["Credit amount"].max()),
+            float(df["Credit amount"].median())
+        )
+        duration = st.number_input(
+            "Duration",
+            int(df["Duration"].min()),
+            int(df["Duration"].max()),
+            int(df["Duration"].median())
+        )
+        purpose = st.selectbox("Purpose", df["Purpose"].unique())
+        submitted = st.form_submit_button("Predict")
+
+    if submitted:
+        # Build input DataFrame
+        input_dict = {
+            "Age": age,
+            "Sex": sex,
+            "Job": job,
+            "Housing": housing,
+            "Saving accounts": saving,
+            "Checking account": checking,
+            "Credit amount": credit,
+            "Duration": duration,
+            "Purpose": purpose
+        }
+        input_df = pd.DataFrame([input_dict])
+
+        # Encode and align columns
+        input_df = pd.get_dummies(input_df, drop_first=True)
+        input_df = input_df.reindex(columns=X.columns, fill_value=0)
+
+        # Scale only numeric columns
+        input_df[num_cols] = scaler.transform(input_df[num_cols])
+
+        # Predict
+        pred = model.predict(input_df)[0]
+        prob = model.predict_proba(input_df)[0, 1]
+        label = "🟢 Good Credit" if pred == 0 else "🔴 Bad Credit"
+
+        st.subheader("Prediction Results")
+        st.write(f"{label} (probability of bad credit: {prob:.2f})")
