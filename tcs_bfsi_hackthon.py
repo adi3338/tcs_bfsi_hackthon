@@ -1,99 +1,96 @@
-import os
+import streamlit as st
 import pandas as pd
-import joblib
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
-import xgboost as xgb
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 
-# Load dataset
-data_path = "./german_credit_data.csv"
-credit_data = pd.read_csv(data_path)
+# Function to load and preprocess data
+def load_data():
+    df = pd.read_csv("german_credit_data.csv")  # Load the unzipped CSV file
+    df['Class'] = df['Credit amount'].apply(lambda x: 1 if x > 5000 else 0)  # Create the target variable
+    return df
 
-# Drop unnecessary column
-credit_data.drop(columns=['Unnamed: 0'], inplace=True)
+# Function to train the model
+def train_model(X_train, y_train):
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    return model
 
-# Handle missing values in categorical columns
-credit_data.fillna({'Saving accounts': 'unknown', 'Checking account': 'unknown'}, inplace=True)
+# Streamlit Interface
+st.title("Credit Risk Prediction App")
+st.write("This app predicts credit risk based on the German Credit dataset.")
 
-# Encode categorical features
-encoders = {}
-for category in credit_data.select_dtypes(include='object').columns:
-    encoder = LabelEncoder()
-    credit_data[category] = encoder.fit_transform(credit_data[category])
-    encoders[category] = encoder
+# Upload file for custom use
+uploaded_file = st.file_uploader("Upload the dataset (optional)", type="csv")
+if uploaded_file is not None:
+    df = pd.read_csv(uploaded_file)
+    st.write("Dataset Loaded Successfully!")
+else:
+    df = load_data()
+    st.write("Using default dataset: German Credit Data.")
 
-# Normalize numerical features
-features_to_scale = ['Age', 'Credit amount', 'Duration']
-scaler_tool = StandardScaler()
-credit_data[features_to_scale] = scaler_tool.fit_transform(credit_data[features_to_scale])
+# Display first few rows of the dataset
+st.subheader("Dataset Preview")
+st.write(df.head())
 
-# Define target variable based on thresholds
-credit_limit = credit_data['Credit amount'].median()
-time_limit = credit_data['Duration'].median()
-credit_data['Target'] = ((credit_data['Credit amount'] > credit_limit) & 
-                         (credit_data['Duration'] < time_limit)).astype(int)
+# Select features and target
+X = df.drop(columns=['Class', 'Unnamed: 0'])
+y = df['Class']
 
+# One-hot encode categorical variables
+X = pd.get_dummies(X, drop_first=True)
 
+# Split into train and test sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# Correlation Heatmap
-plt.figure(figsize=(12, 8))
-sns.heatmap(credit_data.corr(), annot=True, cmap='coolwarm', fmt=".2f", linewidths=0.5)
-plt.title('Feature Correlation Heatmap')
-plt.tight_layout()
-plt.show()
+# Scaling the data
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
 
-# Prepare data for training
-features = credit_data.drop(columns=['Target'])
-target = credit_data['Target']
-X_train_set, X_test_set, y_train_set, y_test_set = train_test_split(
-    features, target, test_size=0.2, stratify=target, random_state=42
-)
+# Train the model
+model = train_model(X_train, y_train)
+st.write("✅ Model Trained Successfully!")
 
-# Hyperparameter grid for tuning
-tune_grid = {
-    'n_estimators': [100, 200],
-    'max_depth': [3, 5, 7],
-    'learning_rate': [0.01, 0.1, 0.2],
-}
+# Make predictions on the test set
+y_pred = model.predict(X_test)
 
-# Initialize and perform grid search
-base_model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42)
-grid_search_model = GridSearchCV(estimator=base_model, param_grid=tune_grid, 
-                                 scoring='f1', cv=3, verbose=1, n_jobs=-1)
-grid_search_model.fit(X_train_set, y_train_set)
+# Accuracy and classification report
+accuracy = accuracy_score(y_test, y_pred)
+st.write(f"Accuracy: {accuracy:.2f}")
 
-# Evaluation
-final_model = grid_search_model.best_estimator_
-predicted_labels = final_model.predict(X_test_set)
-
-performance_report = classification_report(y_test_set, predicted_labels, output_dict=True)
-conf_matrix = confusion_matrix(y_test_set, predicted_labels)
-optimal_params = grid_search_model.best_params_
-
-print(performance_report, conf_matrix, optimal_params)
-
+st.subheader("Classification Report")
+st.text(classification_report(y_test, y_pred))
 
 # Confusion Matrix
-plt.figure(figsize=(6, 5))
-sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='YlGnBu', xticklabels=['Low Risk', 'High Risk'], yticklabels=['Low Risk', 'High Risk'])
-plt.title('Confusion Matrix')
-plt.xlabel('Predicted')
-plt.ylabel('Actual')
-plt.tight_layout()
-plt.show()
+st.subheader("Confusion Matrix")
+cm = confusion_matrix(y_test, y_pred)
+fig, ax = plt.subplots(figsize=(7, 5))
+sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax)
+st.pyplot(fig)
 
+# Feature importance visualization
+st.subheader("Feature Importance")
+importances = model.feature_importances_
+feature_names = X.columns
+feat_df = pd.DataFrame({'Feature': feature_names, 'Importance': importances}).sort_values(by='Importance', ascending=False)
 
-best   = grid_search_model.best_estimator_    
-scaler = scaler_tool 
+fig2, ax2 = plt.subplots(figsize=(10, 6))
+sns.barplot(data=feat_df.head(10), x="Importance", y="Feature", ax=ax2)
+st.pyplot(fig2)
 
+# Prediction on a custom input
+st.subheader("Predict Credit Risk for Custom Input")
+sample_input = []
+for feature in X.columns:
+    sample_input.append(st.number_input(f"Enter value for {feature}", value=0.0))
+sample_input = np.array(sample_input).reshape(1, -1)
 
-# 11. Save artifacts
-os.makedirs('model_artifacts', exist_ok=True)
-joblib.dump(best,      'model_artifacts/best_xgb_model.pkl')
-joblib.dump(encoders,  'model_artifacts/encoders.pkl')
-joblib.dump(scaler,    'model_artifacts/scaler.pkl')
-
+if st.button('Predict'):
+    prediction = model.predict(sample_input)
+    result = "Good Credit" if prediction[0] == 0 else "Bad Credit"
+    st.write(f"🔮 Prediction: {result}")
